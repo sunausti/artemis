@@ -23,7 +23,7 @@ COPY apps/showcase_ui/src/ ./src/
 RUN npm run build
 
 
-FROM python:3.12-slim AS wheel-builder
+FROM python:3.12-slim-bookworm AS wheel-builder
 
 WORKDIR /build
 COPY artemis/ ./artemis/
@@ -32,37 +32,65 @@ COPY mcp_server/ ./mcp_server/
 COPY third_party/ ./third_party/
 COPY packages/artemis-client/ ./packages/artemis-client/
 COPY config/ ./config/
-COPY pyproject.toml setup.py README.md LICENSE ./
+COPY pyproject.toml uv.lock setup.py README.md LICENSE ./
 COPY --from=frontend-builder /build/apps/showcase_ui/dist/ ./apps/showcase_ui/dist/
 
-# Build wheels for the runtime image.
-RUN python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels ./packages/artemis-client \
+# Export pinned runtime dependencies; do not resolve newer model SDKs at build time.
+RUN python -m pip install --no-cache-dir uv==0.13.7 \
+    && uv export --frozen --no-dev --no-emit-workspace --no-hashes --output-file /requirements.txt \
+    && python -m pip wheel --no-cache-dir --wheel-dir /wheels -r /requirements.txt \
+    && python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels ./packages/artemis-client \
     && python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels .
 
 
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     adb \
     curl \
+    ffmpeg \
     git \
+    libgl1 \
+    libglib2.0-0 \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=wheel-builder /wheels/ /wheels/
-RUN pip install --no-cache-dir /wheels/artemis_client-*.whl \
-    && pip install --no-cache-dir /wheels/artemis-*.whl \
+RUN pip install --no-cache-dir --no-index --find-links /wheels /wheels/artemis-*.whl \
+    && pip check \
     && rm -rf /wheels
 
-ENV PYTHONUNBUFFERED=1
-ENV ARTEMIS_APP_DIR=/app
-ENV PORT=8080
+COPY scripts/container_entrypoint.py /usr/local/bin/artemis-container-entrypoint.py
+COPY config/artemis.local.jsonc /etc/artemis/artemis.jsonc
+# helper_manager resolves its APK relative to the installed artemis package.
+COPY packages/artemis-accessibility-helper/ArtemisAccessibilityHelper.apk \
+     packages/artemis-accessibility-helper/helper_manifest.json \
+     /usr/local/lib/python3.12/site-packages/packages/artemis-accessibility-helper/
 
-EXPOSE 8080
+ENV PYTHONUNBUFFERED=1 \
+    ARTEMIS_APP_DIR=/var/lib/artemis \
+    ARTEMIS_ARTEMIS_JSONC=/etc/artemis/artemis.jsonc \
+    ARTEMIS_DEFAULT_PROFILE=flash \
+    ARTEMIS_KEEP_DEVICE_AWAKE=false \
+    ADB_HOST=127.0.0.1 \
+    ADB_PORT=5037 \
+    ADB_DEVICE_SERIAL=127.0.0.1:5555 \
+    ARTEMIS_ADB_CONNECT_TIMEOUT=60 \
+    ARTEMIS_ADB_RETRY_INTERVAL=2 \
+    OPENAI_BASE_URL=http://127.0.0.1:8080/v3 \
+    OPENAI_API_KEY=local-ovms \
+    ARTEMIS_SERVER_HOST=127.0.0.1 \
+    PORT=8000
 
-# The console has no user authentication: publish the port to loopback only,
-# e.g. `docker run -p 127.0.0.1:8080:8080 ...`, and reach it remotely through
-# a Tailscale/SSH tunnel. (0.0.0.0 here is container-internal and required
-# for the port mapping to work.)
-CMD ["uvicorn", "apps.admin_console.server:app", "--host", "0.0.0.0", "--port", "8080"]
+RUN mkdir -p /var/lib/artemis /root/.android
+VOLUME ["/var/lib/artemis", "/root/.android"]
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD curl --fail --silent --max-time 4 "http://127.0.0.1:${PORT}/api/status" > /dev/null || exit 1
+
+# AAOS deployment uses --network host; ADB connects to the device's existing adbd.
+# Tini forwards shutdown signals and reaps ADB / task worker child processes.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "python", "/usr/local/bin/artemis-container-entrypoint.py"]

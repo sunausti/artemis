@@ -106,6 +106,218 @@ cd artemis
 
 > **提示**：启动后将自动在默认浏览器中打开 Web 控制台（`http://localhost:8000`），提供设备连接向导、实时投屏、任务演练与状态回放面板。你也可以通过命令行直接运行：`uv run artemis run "打开系统设置，找到电池选项并告诉我当前电量" --profile flash`。
 
+<a id="aaos-local-voice"></a>
+### Android Automotive：端侧语音控制部署
+
+ARTEMIS 可以在支持 **Linux Docker 的 Android Automotive 盒子**上运行，复用同一台盒子上的 **本地 ASR、Qwen3.6 和 TTS 服务**。音频、截图和模型请求在盒子内部流转，运行时无需调用云端语音或推理服务；首次镜像构建需要下载基础镜像和依赖。
+
+#### 1. 端侧方案与运行条件
+
+```text
+Android 盒子
+├─ 浏览器 /voice：麦克风收音、显示任务状态、播放语音
+│       ↓ WAV 音频                 ↑ WAV 播报
+├─ Artemis Linux 容器（host 网络）
+│  ├─ 语音桥接 API → 本地 ASR → 识别文字 → 异步 UI 任务
+│  ├─ Agent → 本地 Qwen3.6 → 根据截图和 UI 树决定操作
+│  ├─ 最终执行报告 → 本地 TTS → 播报结果
+│  └─ ADB server：5037 → Android adbd：5555
+├─ ASR 容器：SenseVoice，8090
+├─ 推理容器：OVMS / Qwen3.6-35B-A3B-int4-ov，8080
+├─ TTS 容器：Qwen3-TTS，8094
+└─ Android 应用 + Artemis Helper APK：提供 UI 元素树
+```
+
+需要准备：
+
+- Android 盒子可运行 Linux Docker，并已开放、授权 ADB TCP 连接。
+- 本地 ASR、Qwen3.6、TTS 已部署，模型文件已就绪。**Artemis 镜像不包含这三个模型，也不会启动或下载它们。**
+- Qwen 服务支持 OpenAI-compatible Chat Completions、图片输入和工具调用；ASR/TTS 支持下表中的接口。
+- Android 浏览器支持麦克风和 AudioWorklet。使用盒子浏览器收音时，整条链路均在盒子端。
+
+当前参考设备为 **Intel x86_64、Android 16 / API 36 的 AAOS**，内部已有 Docker 和上述本地服务。普通 Android 系统仅有 APK 运行环境时，不能直接使用这个 Linux 容器部署方式。
+
+| 服务 | 默认 Base URL | Artemis 请求的接口 | 默认参数 |
+| --- | --- | --- | --- |
+| ASR | `http://127.0.0.1:8090/v1` | `POST /audio/transcriptions`，multipart WAV，返回 JSON `text` | 模型 `sensevoice`，语言 `auto` |
+| Qwen3.6 / OVMS | `http://127.0.0.1:8080/v3` | `POST /chat/completions`，图片及工具调用 | 模型 `Qwen3.6-35B-A3B-int4-ov` |
+| TTS | `http://127.0.0.1:8094/v1` | `POST /audio/speech`，返回单声道 PCM16 | 模型 `qwen3-tts`，音色 `vivian`，采样率 `24000` |
+| Android adbd | `127.0.0.1:5555` | Android 设备连接端口 | `ADB_DEVICE_SERIAL` |
+| ADB server | `127.0.0.1:5037` | 容器内 Artemis 的 ADB 入口 | `ADB_HOST` / `ADB_PORT` |
+| Artemis | `http://127.0.0.1:8000` | 控制台、`/voice`、任务 API | `PORT=8000` |
+
+这里的“本地 ASR/TTS”指**盒子上的 HTTP 模型服务**，不要求它们注册为 Android `SpeechRecognizer` / `TextToSpeech` 引擎。语音页面直接通过 Artemis 后端访问它们，不经过现有 speech-to-speech 聊天服务。
+
+#### 2. 构建 Docker Image
+
+在开发机的项目根目录执行。Intel x86_64 盒子的镜像平台为 `linux/amd64`：
+
+```bash
+docker build --platform linux/amd64 -t artemis-aaos:local .
+```
+
+镜像多阶段构建会编译 Web 控制台、按 `uv.lock` 固定版本构建 Python 依赖，并包含语音页面、ADB、FFmpeg、Tini 和预编译 Helper APK。**构建不会连接 Android，也不会安装设备 APK。** 在 ARM 开发机上构建 amd64 镜像需要 Docker 已配置跨架构构建能力。
+
+如需离线传到盒子，可在开发机导出：
+
+```bash
+docker save -o artemis-aaos.tar artemis-aaos:local
+```
+
+将 `artemis-aaos.tar` 复制到盒子可访问的位置，再在盒子的 Docker 环境中导入：
+
+```bash
+docker load -i /path/to/artemis-aaos.tar
+```
+
+Intel LIC 环境如果没有将 Docker 加入 PATH，可使用其实际入口，例如：
+
+```bash
+su 0 /apex/com.intel.apex.lic/bin/docker load -i /path/to/artemis-aaos.tar
+```
+
+下文的 `docker` 命令同样在**盒子本机的 Docker 环境**执行。
+
+#### 3. 启动 Artemis 容器
+
+确保本地模型服务和 Android adbd 已运行，然后启动：
+
+```bash
+docker run -d \
+  --name artemis \
+  --network host \
+  --restart unless-stopped \
+  -v artemis-data:/var/lib/artemis \
+  -v artemis-adb-keys:/root/.android \
+  -e ADB_HOST=127.0.0.1 \
+  -e ADB_PORT=5037 \
+  -e ADB_DEVICE_SERIAL=127.0.0.1:5555 \
+  -e OPENAI_BASE_URL=http://127.0.0.1:8080/v3 \
+  -e OPENAI_API_KEY=local-ovms \
+  -e PORT=8000 \
+  artemis-aaos:local
+```
+
+`--network host` 让容器与 Android 盒子共享网络：容器中的 `127.0.0.1` 可以访问同盒子的 ASR、OVMS、TTS 和 adbd。无需给 Artemis 分配 GPU，推理复用已有的模型容器。
+
+入口自动启动 ADB server，并连接、检查 `127.0.0.1:5555`；设备就绪后启动 Artemis。默认连接总超时 60 秒、重试间隔 2 秒；未授权时退出并提示授权，其他连接失败超时后退出，由重启策略重新尝试。
+
+- `/var/lib/artemis`：持久化任务数据库、记录和语音设置。
+- `/root/.android`：持久化容器的 ADB 密钥，避免重建后重复授权。
+- 如 `5037` 已被其他服务占用，改用 `-e ADB_PORT=15037`；如 `8000` 被占用，改用 `-e PORT=8001`，并同步修改浏览器访问地址。
+- 开发机上的 `127.0.0.1:15555` 是 SSH 转发入口；**盒子内容器使用 `127.0.0.1:5555`，不是 `15555`**。
+
+查看启动状态：
+
+```bash
+docker logs --tail 100 artemis
+docker exec artemis adb -H 127.0.0.1 -P 5037 devices -l
+curl -fsS http://127.0.0.1:8000/api/status
+```
+
+如覆盖了 ADB 或 HTTP 端口，上面的检查命令也要相应修改。HTTP 健康检查表示 Artemis 服务存活，不代表 ASR/TTS、模型视觉能力和设备任务已经验证通过。
+
+#### 4. 在语音设置中配置 ASR / Qwen3.6 / TTS
+
+在盒子浏览器打开 **`http://127.0.0.1:8000/voice`**，展开“语音设置：ASR / Qwen3.6 / TTS”：
+
+1. **ASR**：填写服务地址、模型名和语言。修改端口时直接把 `8090` 改成实际端口；中文可使用服务支持的 `zh`，默认 `auto` 不向 ASR 发送固定语言提示。
+2. **Qwen3.6**：填写 OVMS 地址及其实际注册的模型 ID，例如 `Qwen3.6-35B-A3B-int4-ov`。注意该 OVMS 的 API 前缀是 **`/v3`**。
+3. **TTS**：填写服务地址、模型名、音色和 PCM 采样率。采样率必须与服务实际返回的音频一致，默认 `24000`。
+4. **目标设备**：填写容器内 ADB 的设备序列号，默认 `127.0.0.1:5555`。
+5. 点击“保存语音设置”。
+
+填写的是 **Base URL**，例如 `http://127.0.0.1:8090/v1`，不要填完整的 `/audio/transcriptions` 或 `/chat/completions` 路径；Artemis 会追加相应接口。端口、主机地址和 API 前缀都可编辑。
+
+设置保存在 `/var/lib/artemis/voice-settings.json`。ASR/TTS 每次请求读取已保存设置；Qwen 地址和模型在**每条语音任务提交时生成快照**，该任务的主模型、辅助模型和历史摘要使用同一端侧配置。修改设置对后续语音任务生效，不影响正在执行的任务或普通控制台任务。语音设置不会改变 ADB server 的监听端口或建立新设备连接。
+
+普通控制台任务使用镜像内的 `/etc/artemis/artemis.jsonc`（来源为 [`config/artemis.local.jsonc`](config/artemis.local.jsonc)）及 `OPENAI_BASE_URL`。需要修改普通任务的模型配置时，可在启动命令中添加：
+
+```bash
+-v /path/to/artemis.local.jsonc:/etc/artemis/artemis.jsonc:ro
+```
+
+#### 5. Android 无障碍 Helper APK
+
+[`ArtemisAccessibilityHelper.apk`](packages/artemis-accessibility-helper/ArtemisAccessibilityHelper.apk) 是独立 Android 应用，包名为 `com.artemis.helper`，提供无障碍 UI 元素树和相关控制接口。它是纯 Java / DEX APK，没有 ABI 专用原生库，支持 x86_64；不负责 ASR、TTS 或模型推理。
+
+镜像携带 APK 和配套的 `helper_manifest.json`，**携带不等于已经安装到 Android**。容器入口不会安装它；任务执行时默认允许 Artemis 自动安装并启用 Helper，失效时可回退到 UIAutomator2。如希望手动管理安装，在容器启动参数中添加 `-e ARTEMIS_HELPER_AUTO_INSTALL=false`。
+
+在具备 Android SDK 和 JDK 的开发机上，可从源码重新构建：
+
+```bash
+bash packages/artemis-accessibility-helper/build_apk.sh
+```
+
+该脚本会更新同目录的 APK 和版本／校验清单，随后重新构建 Docker 镜像即可携带新产物。此前对参考 AAOS 设备的只读检查未发现 `com.artemis.helper`；已启用的 Intel Ebox 无障碍服务不是此 Helper。当前用户 10 下的安装、无障碍启用及兼容性仍需部署后验证。
+
+#### 6. 使用语音控制
+
+1. 打开 `/voice`，保存服务配置并允许浏览器使用麦克风。
+2. **按住说话，松开发送**；也可聚焦按钮后按住空格键或 Enter。每次最长录音 60 秒。
+3. 识别文字会显示在输入框，并自动作为 Flash 任务提交。也可直接输入或编辑文字后点击“发送文字任务”。
+4. 页面显示任务 ID 和状态，播报“正在处理”；完成后读取实际执行报告并通过本地 TTS 播报。
+5. 任务运行中可按住说“停止”或“取消任务”，也可点击“停止当前任务”。取消请求是异步的；语音取消需等 ASR 识别完成后才会发出。说“停止音乐播放”等完整指令不会被误当作任务取消口令。
+
+可先使用明确的界面任务：
+
+> “打开系统设置，进入蓝牙页面，告诉我蓝牙是否开启，不要修改设置。”
+>
+> “打开音乐应用，搜索周杰伦，播放稻香。”
+
+当前方案是 **UI 自动化语音入口**：识别后的指令会交给 Artemis 执行，默认每个语音任务最多 30 轮。它不提供唤醒词、持续双工监听或通用语音闲聊；空调、车窗等直接车控需要另接 AAOS／厂家车控接口。
+
+麦克风需要浏览器安全上下文，使用 **localhost、127.0.0.1 或 HTTPS**。普通 `http://盒子IP:8000/voice` 通常不能获取麦克风；在开发机通过转发后的 localhost 打开页面可以调试，但收音和播放发生在开发机。浏览器阻止自动播报时，可点击页面中的音频播放控件。
+
+#### 7. 通过 API 接入其他端侧客户端
+
+Android 原生应用或其他本地客户端也可以使用同一套接口：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/voice/settings` / `PUT /api/voice/settings` | 读取／保存完整语音配置 |
+| `POST /api/voice/transcribe` | multipart 字段 `file` 上传 WAV，返回 `{"text":"识别文字"}` |
+| `POST /api/voice/speech` | JSON `{"text":"播报内容"}`，返回 WAV |
+| `POST /api/run` | 提交异步 UI 任务 |
+| `GET /api/voice/tasks/{session_id}` | 查询状态和最终报告文字 |
+| `POST /api/stop` | 取消指定任务 |
+
+例如，使用已保存的端侧 Qwen 设置提交任务：
+
+```bash
+curl -sS http://127.0.0.1:8000/api/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "goal": "打开设置，查看蓝牙状态，不要修改设置",
+    "profile": "flash",
+    "device_serial": "127.0.0.1:5555",
+    "ingress": "voice",
+    "use_voice_settings": true
+  }'
+```
+
+从返回值 `tasks[0].session_id` 取得任务 ID，再查询或取消：
+
+```bash
+curl -sS 'http://127.0.0.1:8000/api/voice/tasks/<session_id>'
+
+curl -sS http://127.0.0.1:8000/api/stop \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"<session_id>"}'
+```
+
+请将 `<session_id>` 替换为实际 ID。任务被接受并不表示已经执行完成。
+
+#### 8. 验证状态与常见问题
+
+- **构建拉取失败**：此前开发机的完整镜像构建因 Docker Hub TLS 握手超时中断；排除基础镜像网络问题后重新构建，当前没有完成完整镜像与 AAOS 联调验收。
+- **容器反复重启**：检查日志中的 ADB 超时或 `unauthorized`，确认目标地址、ADB 授权及端口冲突。
+- **ASR/TTS 连接失败**：检查语音设置中的主机、端口、API 前缀，并确认已有模型服务正在运行。
+- **Qwen 文字可用、截图任务失败**：需要验证当前 OVMS 部署的图片输入与工具调用支持；模型文件包含视觉编码器不等于服务链路已经验证。
+- **无障碍树或控件不可用**：检查 Helper 在当前 Android 用户下的安装与启用状态，或 UIAutomator2 回退状态。
+
+语音桥接、队列配置和音频处理已通过开发机模拟测试；真实麦克风、端侧 ASR/TTS、Qwen 视觉工具调用及 AAOS 操作仍需实测。详细运行说明见 [AAOS 容器文档](docs/aaos-container.md)。
+
 <a id="mcp-setup"></a>
 <a id="mcp"></a>
 <details>

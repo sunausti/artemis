@@ -165,6 +165,12 @@ async def run_task(request: RunRequest):
         if verified_serial and not request.device_serial:
             target_serial = verified_serial
 
+    model_runtime = None
+    if request.use_voice_settings:
+        from apps.admin_console.services.voice_service import voice_service
+
+        model_runtime = await asyncio.to_thread(voice_service.model_runtime)
+
     return await task_queue_service.enqueue_tasks(
         incoming_goals,
         profile=request.profile or "flash",
@@ -178,6 +184,7 @@ async def run_task(request: RunRequest):
         ingress=request.ingress or "frontend",
         session_id=request.session_id,
         conversation_id=request.conversation_id,
+        model_runtime=model_runtime,
     )
 
 

@@ -151,7 +151,7 @@ setup(
     package_data={
         "artemis": ["**/*.json", "**/*.md"],
         "artemis.resources": ["config/*.jsonc", "showcase_ui/*", "showcase_ui/**/*"],
-        "apps.admin_console": ["index.html"],
+        "apps.admin_console": ["index.html", "voice/*.html", "voice/*.js", "voice/*.css"],
         # third_party has no __init__.py (namespace package), so it does not clash
         # with other distributions that also ship a third_party directory.
         "third_party.mobile_use": ["LICENSE", "NOTICE", "METADATA", "**/*.md"],

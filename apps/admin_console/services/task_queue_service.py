@@ -525,6 +525,11 @@ class TaskQueueService:
             env["ARTEMIS_SESSION_ID"] = str(sess_id)
         env["ARTEMIS_TASK_INGRESS"] = str(task_item.get("ingress", "frontend"))
         env["ARTEMIS_TASK_WORKER"] = "1"
+        model_runtime = task_item.get("model_runtime")
+        if model_runtime:
+            for name in ("ARTEMIS_ARTEMIS_JSONC", "OPENAI_BASE_URL", "OPENAI_API_KEY"):
+                if name in model_runtime:
+                    env[name] = str(model_runtime[name])
         target.endpoint.apply_to_environment(env)
         env[DeviceExecutionLock.LOCK_SCOPE_ENV] = target.lock_scope
         queue_ticket = task_item.get("queue_ticket")
@@ -1052,6 +1057,7 @@ class TaskQueueService:
         conversation_id: str | None = None,
         verification_level: str | None = None,
         explorer_mode: str | None = None,
+        model_runtime: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Enqueues one or more goals and wakes up the background worker.
 
@@ -1107,6 +1113,8 @@ class TaskQueueService:
                 explorer_mode=explorer_mode,
             )
             state.queue_items.append(task_item)
+            if model_runtime:
+                task_item["model_runtime"] = dict(model_runtime)
             enqueued_tasks.append(task_item)
             cls._broadcast_startup_progress(
                 task_item["session_id"], "queued", "Task received and queued"

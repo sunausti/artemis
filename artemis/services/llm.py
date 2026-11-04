@@ -961,6 +961,21 @@ def _get_llm(
 get_llm: GetLLM = _get_llm
 
 
+def get_memory_llm(ctx: ArtemisContext, model_name: str) -> BaseChatModel:
+    """Build a raw memory model using the summarizer role's provider.
+
+    Memory lenses meter their own calls. Preserve the dedicated Google model
+    override, but let local/OpenAI-compatible deployments use that same override
+    through their configured endpoint instead of constructing a Google client.
+    """
+    endpoint = _resolve_endpoint(ctx, "summarizer")
+    if endpoint.provider == ModelProvider.GOOGLE:
+        return get_google_llm(model_name=model_name, temperature=0.0)
+    return ModelFactory.create_model(
+        endpoint.model_copy(update={"model_name": model_name, "temperature": 0.0})
+    )
+
+
 class _ObservedFallback(FallbackRunner):
     """Fall back only on failures another endpoint could fix, and record it.
 

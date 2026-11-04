@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Artemis 语音控制</title>
+  <link rel="stylesheet" href="/voice/style.css">
+</head>
+<body>
+<main>
+  <header><div><h1>Artemis 语音控制</h1><p>本地识别 · 本地推理 · 本地播报</p></div><a href="/">控制台</a></header>
+  <section class="card">
+    <p id="status" role="status" aria-live="polite">加载语音设置…</p>
+    <div class="controls">
+      <button id="talk" disabled>按住说话，松开发送</button>
+      <button id="stop" class="secondary" disabled>停止当前任务</button>
+    </div>
+    <p class="hint">任务运行时也可以按住说“停止”。按空格键或触摸按钮录音，最长六十秒。</p>
+    <label for="command">识别文字 / 文字指令</label>
+    <textarea id="command" rows="3" placeholder="例如：打开设置，查看蓝牙是否开启，不要修改设置"></textarea>
+    <button id="send" disabled>发送文字任务</button>
+    <p id="task-id"></p>
+    <pre id="result" aria-live="polite"></pre>
+    <audio id="playback" controls></audio>
+  </section>
+  <details class="card" id="settings-panel">
+    <summary>语音设置：ASR / Qwen3.6 / TTS</summary>
+    <p class="hint">地址由 Artemis 服务端访问。host 网络下的 127.0.0.1 指盒子本机；可直接修改地址中的端口和 API 前缀。保存后对下一条任务生效。</p>
+    <form id="settings">
+      <fieldset><legend>ASR 语音识别</legend>
+        <label>服务地址（含端口）<input name="asr_base_url" type="url" required></label>
+        <label>模型<input name="asr_model" required></label>
+        <label>语言<input name="asr_language" required placeholder="auto / zh"></label>
+      </fieldset>
+      <fieldset><legend>Qwen3.6 本地推理</legend>
+        <label>服务地址（含端口）<input name="llm_base_url" type="url" required></label>
+        <label>模型<input name="llm_model" required></label>
+      </fieldset>
+      <fieldset><legend>TTS 语音合成</legend>
+        <label>服务地址（含端口）<input name="tts_base_url" type="url" required></label>
+        <label>模型<input name="tts_model" required></label>
+        <label>音色<input name="tts_voice" required></label>
+        <label>PCM 采样率<input name="tts_sample_rate" type="number" min="8000" max="48000" required></label>
+      </fieldset>
+      <label>目标设备序列号<input name="device_serial" required></label>
+      <button type="submit">保存语音设置</button><span id="settings-status" role="status"></span>
+    </form>
+  </details>
+</main>
+<script type="module" src="/voice/voice.js"></script>
+</body>
+</html>

@@ -323,9 +323,12 @@ class StepCapsuleLens(StepLens):
 
     def _get_llm(self):
         if self._llm is None:
-            from artemis.services.llm import get_google_llm
+            from artemis.services.llm import get_google_llm, get_memory_llm
 
-            self._llm = get_google_llm(model_name=self._model_name, temperature=0.0)
+            if self._ctx is not None:
+                self._llm = get_memory_llm(self._ctx, self._model_name)
+            else:
+                self._llm = get_google_llm(model_name=self._model_name, temperature=0.0)
         return self._llm
 
     def _get_fallback_llm(self):

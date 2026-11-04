@@ -69,6 +69,7 @@ from artemis.config import (
     init_ls_address,
 )
 from artemis.resources import get_bundled_showcase_dist
+from apps.admin_console.routers import voice
 
 try:
     from admin_console.core.security import SameOriginBoundaryMiddleware
@@ -224,6 +225,7 @@ app.include_router(steps.router)
 app.include_router(tasks.router)
 app.include_router(replay.router)
 app.include_router(system.router)
+app.include_router(voice.router)
 
 # Mount cloud gateway router for Frappe / Cloud integration if present
 try:

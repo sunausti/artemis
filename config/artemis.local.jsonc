@@ -1,0 +1,39 @@
+{
+  // AAOS host-network container: all model roles share the existing OVMS service.
+  // OPENAI_BASE_URL=http://127.0.0.1:8080/v3, OPENAI_API_KEY=local-ovms
+  "default": {
+    "provider": "openai",
+    "model": "Qwen3.6-35B-A3B-int4-ov",
+    "temperature": 0.0,
+    "enable_grounding": false,
+    "fallback": {
+      "provider": "openai",
+      "model": "Qwen3.6-35B-A3B-int4-ov"
+    }
+  },
+  "nodes": {},
+  "agent": {
+    "flash": {
+      "max_turns": 30,
+      "explorer_mode": "pro",
+      "step_summarizer": {
+        "enabled": true,
+        "model": "Qwen3.6-35B-A3B-int4-ov",
+        "prune_history_xml": true
+      }
+    },
+    "pro": {
+      "explorer": {"mode": "pro"},
+      "planner_validation": {"enabled": false},
+      "committee": {"enabled": false}
+    },
+    "memory": {
+      "runtime": {"max_concurrency": 1, "retry_limit": 1},
+      "transcript": {"context_budget_tokens": 16384},
+      "chunking": {"model": "Qwen3.6-35B-A3B-int4-ov"}
+    },
+    "video_analyzer": {"enabled": false, "enable_ledger": false},
+    "explorer": {"default_version": "pro", "caching": false},
+    "denylisted_tools": {"explorer": ["get_ocr_list"]}
+  }
+}
