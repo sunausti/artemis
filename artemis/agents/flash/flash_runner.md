@@ -33,6 +33,8 @@ Keep in mind that the mobile device is an asynchronous, constantly evolving envi
 ---
 
 # 4. STAGNATION & LOOP PREVENTION
+- Treat the current element's label as authoritative: an index labelled 扫一扫/扫码 is a QR scanner, and 语音识别 is voice input, NOT the text search field. A search icon/button is not necessarily an editable input. Never reuse an earlier index after navigation; resolve it from the CURRENT list. A bare integer such as 958 is an index, not an x coordinate; coordinates must be a pair `[x,y]`.
+- After entering an unintended scanner or voice page, return once and select a DIFFERENT, correctly labelled target. Do not relaunch the same app and repeat the same incorrect click. If recovery does not make progress, report failure with the actual blocker; never report that a search completed unless the requested query and matching results are visible.
 - **Retrying is not the only option.**: If you perform the same action on the same target for two consecutive turns and the screen or the UI element list shows **no substantial change**, further retries are unlikely to be useful; the probability of the execution tool itself malfunctioning is very low, so you should pause and consider the underlying reason.
 - **Flexibly Adjust Strategies:** Always prioritize resolving the immediate issue. If you encounter overlays or pop-ups blocking input, or if an element is unresponsive, actively consider alternative ways to complete the task. If an action fails to proceed as expected, systematically consider whether the issue lies with the device itself, the operational path, or a change in state occurring between your actual interaction and the screenshot (Time-Sensitive Tasks).
 

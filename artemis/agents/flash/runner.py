@@ -142,6 +142,9 @@ class FlashRunner:
     def __init__(self, ctx: ArtemisContext, goal: str, max_turns: int | None = None):
         self.ctx = ctx
         self.goal = goal
+        from artemis.agents.flash.loop_guard import LoopGuard
+
+        self.loop_guard = LoopGuard()
         try:
             cfg = load_agent_config()
             self.max_turns = max_turns if max_turns is not None else cfg.flash.max_turns
@@ -847,7 +850,7 @@ class FlashRunner:
 
             if post_img_bytes:
                 pre_screenshot_bytes = post_img_bytes
-            if exec_result.ui_elements_text:
+            if exec_result.ui_elements_text is not None:
                 xml_list = exec_result.ui_elements_text
 
             # Helper tools may return multimodal blocks (a step screenshot);
@@ -951,6 +954,29 @@ class FlashRunner:
                     native_text=native_text,
                 )
                 return final_report, pre_screenshot_bytes, xml_list, action_sequence
+
+            from artemis.agents.flash.loop_guard import search_target_conflict
+
+            loop_error = self.loop_guard.check(name, args, index_elements, pre_screenshot_bytes)
+            if loop_error:
+                final_report = await self._finalize_task_report(
+                    "report_task_status",
+                    {"status": "failed", "explanation": loop_error},
+                    tc_id,
+                    raw_text,
+                    step_token_usage,
+                    pre_screenshot_bytes,
+                    xml_list,
+                    messages,
+                )
+                return final_report, pre_screenshot_bytes, xml_list, action_sequence
+            conflict = search_target_conflict(name, args, index_elements)
+            if conflict:
+                messages.append(
+                    ToolMessage(tool_call_id=tc_id, name=name, content=conflict, status="error")
+                )
+                turn.actions.append((name, "failed", conflict))
+                continue
 
             elements_before = getattr(state, "indexed_elements", None)
             before_len = len(elements_before) if isinstance(elements_before, list) else 0

@@ -162,6 +162,38 @@ def test_resolve_index_uses_the_given_list_and_falls_back_to_the_state():
 
 
 @pytest.mark.asyncio
+async def test_search_mismatch_never_reaches_device_and_repeated_attempt_stops(mock_context):
+    runner = _runner(mock_context, observations=[])
+    state = _state([_el(1, "扫一扫", 919, 47)])
+    call = {
+        "name": "click",
+        "args": {"target": 1, "target_description": "search input field"},
+        "id": "bad-click",
+    }
+    for attempt in range(3):
+        messages = []
+        final, _, _, _ = await runner._process_tool_calls(
+            [call], state, messages, "search", {}, b"same", "same-ui", 0, _TurnRecord()
+        )
+        if attempt < 2:
+            assert final is None
+            assert "扫一扫" in str(messages[-1].content)
+        else:
+            assert final["status"] == "failed"
+    assert runner.executor._session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_empty_new_ui_list_clears_previous_search_indices(mock_context):
+    runner = _runner(mock_context, observations=[[]])
+    state = _state(ORIGINAL)
+    _, _, xml, _ = await runner._process_tool_calls(
+        [_click(2, "tc")], state, [], "search", {}, b"pre", "stale search list", 0, _TurnRecord()
+    )
+    assert xml == ""
+
+
+@pytest.mark.asyncio
 async def test_two_index_clicks_in_one_turn_resolve_against_the_original_list(mock_context):
     """``click(3)`` then ``click(5)``: the first click's observation lists only
     two elements, yet the second index still lands on the original ``[5]``
