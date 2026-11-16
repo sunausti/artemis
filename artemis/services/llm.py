@@ -210,7 +210,8 @@ def _record_llm_event(name: str, payload: dict[str, Any], *, status: str = "retr
         full_payload.setdefault("request_id", request.get("request_id"))
         if request.get("provider"):
             full_payload.setdefault("provider", request.get("provider"))
-    full_payload = {key: value for key, value in full_payload.items() if value is not None}
+    if name != "llm_timing":
+        full_payload = {key: value for key, value in full_payload.items() if value is not None}
 
     step_id = getattr(engine, "current_step_id", None)
     trace_id = None
@@ -641,12 +642,30 @@ class RobustChatModelWrapper:
     async def ainvoke(self, *args, **kwargs):
         args, kwargs, _ = self._traced_call(args, kwargs)
         response = await _run_with_recovery(
-            functools.partial(self.base_model.ainvoke, *args, **kwargs),
+            functools.partial(self._invoke_attempt_with_timing, *args, **kwargs),
             provider=self._provider_value(),
             endpoint_key=self._endpoint_key(),
         )
         self._meter_usage(response)
         return response
+
+    async def _invoke_attempt_with_timing(self, *args, **kwargs):
+        from artemis.llm.request_timing import RequestTiming, active_timing
+
+        timer = RequestTiming()
+        token = active_timing.set(timer)
+        status = "failed"
+        response = None
+        try:
+            response = await self.base_model.ainvoke(*args, **kwargs)
+            status = "success"
+            return response
+        finally:
+            active_timing.reset(token)
+            payload = timer.result(status)
+            payload["transport"] = "non_streaming"
+            payload["usage"] = getattr(response, "usage_metadata", None)
+            _record_llm_event("llm_timing", payload, status=status)
 
     async def complete(self, *args, **kwargs):
         """Single completion entry point: returns the full final message.
@@ -689,6 +708,24 @@ class RobustChatModelWrapper:
             self.ctx.data_engine.stream_output(stream_exec_id, thinking_to_stream, is_thinking=True)
 
     async def _complete_attempt(self, emit_deltas: bool, *args, **kwargs):
+        from artemis.llm.request_timing import RequestTiming, active_timing
+
+        timer = RequestTiming()
+        token = active_timing.set(timer)
+        status = "failed"
+        response = None
+        try:
+            response = await self._timed_complete_attempt(timer, emit_deltas, *args, **kwargs)
+            timer.finish_tools()
+            status = "success"
+            return response
+        finally:
+            active_timing.reset(token)
+            payload = timer.result(status)
+            payload["usage"] = getattr(response, "usage_metadata", None)
+            _record_llm_event("llm_timing", payload, status=status)
+
+    async def _timed_complete_attempt(self, timer, emit_deltas: bool, *args, **kwargs):
         endpoint_key = self._endpoint_key()
         if endpoint_key in _NON_STREAMING_ENDPOINTS:
             return await self.base_model.ainvoke(*args, **kwargs)
@@ -697,6 +734,7 @@ class RobustChatModelWrapper:
         full_response = None
         try:
             async for chunk in self.base_model.astream(*args, **kwargs):
+                timer.chunk(chunk)
                 if full_response is None:
                     full_response = chunk
                 else:

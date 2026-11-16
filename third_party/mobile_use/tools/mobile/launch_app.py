@@ -60,6 +60,42 @@ async def find_package(ctx: ArtemisContext, app_name: str, use_fallback: bool = 
                 package_cache[app_name] = app_name
             return app_name
 
+        # Persistent exact aliases avoid repeated Hopper calls across workers.
+        catalog = None
+        try:
+            import asyncio
+            from artemis.runtime.app_catalog import device_catalog
+            from artemis.runtime.adb_endpoint import adb_command
+
+            async def shell(command):
+                def run():
+                    import subprocess
+
+                    result = subprocess.run(
+                        adb_command(["-s", ctx.device.device_id, "shell", command]),
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=True,
+                    )
+                    return result.stdout
+
+                return await asyncio.to_thread(run)
+
+            import os
+
+            catalog, _, installed = await device_catalog(
+                shell,
+                os.environ.get("ADB_SERVER_SOCKET", "local"),
+                ctx.device.device_id,
+            )
+            cached = catalog.resolve(app_name, installed)
+            if cached:
+                package_cache[app_name] = cached
+                return cached
+        except Exception as cache_error:
+            logger.debug(f"Persistent app catalog unavailable: {cache_error}")
+
         hopper_output: HopperOutput = await hopper(
             ctx=ctx,
             request=(f"I'm looking for the package name of the following app: '{app_name}'"),
@@ -83,6 +119,11 @@ async def find_package(ctx: ArtemisContext, app_name: str, use_fallback: bool = 
 
         if isinstance(package_cache, dict):
             package_cache[app_name] = package_name
+        if catalog is not None:
+            try:
+                catalog.remember(app_name, package_name)
+            except OSError as cache_error:
+                logger.debug(f"Could not persist app alias: {cache_error}")
         return package_name
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error(f"Failed to find package for '{app_name}': {e}")

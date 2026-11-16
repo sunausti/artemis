@@ -7,7 +7,7 @@ a { color: #7dd3fc; } .card { background: #1e293b; border: 1px solid #334155; bo
 button:disabled { opacity: .45; cursor: default; } #talk { min-height: 90px; flex: 1; touch-action: none; user-select: none; }
 #talk.recording { background: #fb7185; } .secondary { background: #475569; color: white; }
 .hint { color: #94a3b8; font-size: .9rem; } label { display: block; margin: 14px 0; }
-input, textarea { display: block; box-sizing: border-box; width: 100%; padding: 12px; margin-top: 8px; border: 1px solid #64748b; border-radius: 8px; background: #0f172a; color: #f8fafc; font: inherit; }
+input, textarea, select { display: block; box-sizing: border-box; width: 100%; padding: 12px; margin-top: 8px; border: 1px solid #64748b; border-radius: 8px; background: #0f172a; color: #f8fafc; font: inherit; }
 fieldset { border: 1px solid #475569; border-radius: 10px; margin: 18px 0; } summary { cursor: pointer; font-weight: 650; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; } audio { width: 100%; margin-top: 12px; }
 #settings-status { margin-left: 12px; } :focus-visible { outline: 3px solid #7dd3fc; outline-offset: 3px; }

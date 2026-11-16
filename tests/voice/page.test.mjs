@@ -10,6 +10,7 @@ test("releasing during microphone permission acquisition closes tracks without s
       classList: { toggle() {} },
       addEventListener(name, callback) { this.handlers[name] = callback; },
       setPointerCapture() {}, pause() {}, load() {}, removeAttribute() {},
+      querySelectorAll() { return []; },
       elements: { namedItem(name) { if (!fields.has(name)) fields.set(name, {}); return fields.get(name); } },
     });
     return elements.get(id);
@@ -43,6 +44,11 @@ test("releasing during microphone permission acquisition closes tracks without s
     for (const [key, value] of Object.entries(mocks)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     await import(`../../apps/admin_console/voice/voice.js?test=${Date.now()}`);
     assert.equal(fields.get("llm_base_url").value, values.llm_base_url);
+    assert.equal(element("omni-settings").hidden, true);
+    element("voice-mode").value = "omni";
+    element("voice-mode").handlers.change();
+    assert.equal(element("omni-settings").hidden, false);
+    assert.equal(element("split-asr").hidden, true);
     element("talk").handlers.pointerdown({ button: 0, pointerId: 1, preventDefault() {} });
     await new Promise((resolve) => setImmediate(resolve));
     element("talk").handlers.pointerup();

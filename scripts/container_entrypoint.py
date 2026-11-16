@@ -71,7 +71,17 @@ def main() -> None:
                 timeout=min(10.0, remaining),
             )
 
-        started = run_adb("start-server")
+        # Older Debian ADB treats any explicit -H (including loopback) as a
+        # remote server and refuses to spawn it. Bootstrap via the local port.
+        bootstrap_env = os.environ.copy()
+        bootstrap_env.pop("ADB_SERVER_SOCKET", None)
+        started = subprocess.run(
+            ["adb", "-P", str(port), "start-server"],
+            capture_output=True,
+            text=True,
+            timeout=min(10.0, timeout),
+            env=bootstrap_env,
+        )
         if started.returncode:
             raise RuntimeError(f"ADB server failed to start: {started.stderr.strip()}")
         print(f"[container] ADB server {socket}; Android target {serial}", flush=True)

@@ -1,6 +1,6 @@
 // Copyright 2026 Google LLC
 // Licensed under the Apache License, Version 2.0.
-import { encodeWav, isStopCommand, terminalMessage } from "./audio.js";
+import { encodeWav, isStopCommand, terminalMessage, transcriptAction } from "./audio.js";
 
 const $ = (id) => document.getElementById(id);
 let settings;
@@ -13,6 +13,16 @@ let processingAudio = false;
 let audioEpoch = 0;
 let audioUrl = null;
 let speechAbort = null;
+
+function showMode() {
+  const omni = $("voice-mode").value === "omni";
+  $("omni-settings").hidden = !omni;
+  for (const id of ["split-asr", "split-llm", "split-tts"]) $(id).hidden = omni;
+  // Keep the inactive mode's values in the form so switching back preserves them.
+  for (const id of ["omni-settings", "split-asr", "split-llm", "split-tts"]) {
+    for (const input of $(id).querySelectorAll("input")) input.required = !$(id).hidden;
+  }
+}
 
 function status(text) { $("status").textContent = text; }
 function buttons() {
@@ -122,7 +132,10 @@ async function finishRecording(discard = false) {
     const response = await request("/api/voice/transcribe", { method: "POST", body: form });
     const { text } = await response.json();
     $("command").value = text;
-    await submit(text);
+    const action = transcriptAction(text, settings.voice_mode);
+    if (action === "stop") await stopTask();
+    else if (action === "review") status("请核对识别文字，确认包含操作对象后点击“发送文字任务”");
+    else await submit(text);
   } catch (error) { status(error.message); }
   finally { processingAudio = false; buttons(); }
 }
@@ -137,6 +150,7 @@ async function submit(text) {
   activeTask = id;
   $("task-id").textContent = `任务 ID：${id}`;
   $("result").textContent = "";
+  $("timings").textContent = "";
   try {
     const response = await request("/api/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -153,7 +167,9 @@ async function submit(text) {
     }
     activeTask = admitted;
     submitting = false; buttons(); status("正在处理，可以按住说“停止”");
-    void speak("正在处理。");
+    // Omni shares its audio and vision pipeline. Do not synthesize an
+    // acknowledgement concurrently with the newly admitted UI task.
+    if (settings.voice_mode !== "omni") void speak("正在处理。");
     void pollTask(admitted);
   } catch (error) {
     // Retain the requested id after network failure: submission may have arrived.
@@ -173,6 +189,13 @@ async function pollTask(id) {
         const text = terminalMessage(task);
         status(task.status === "completed" || task.status === "success" ? "任务完成" : "任务结束");
         $("result").textContent = text;
+        void request(`/api/voice/tasks/${encodeURIComponent(id)}/timings`)
+          .then((response) => response.json())
+          .then((details) => {
+            if ($("task-id").textContent.includes(id)) {
+              $("timings").textContent = JSON.stringify(details.timings, null, 2);
+            }
+          }).catch(() => {});
         void speak(text); return;
       }
       status(`任务状态：${task.status || "等待启动"}`);
@@ -213,17 +236,21 @@ $("settings").onsubmit = async (event) => {
   event.preventDefault();
   const values = Object.fromEntries(new FormData(event.target));
   values.tts_sample_rate = Number(values.tts_sample_rate);
+  values.omni_sample_rate = Number(values.omni_sample_rate);
   try {
     const response = await request("/api/voice/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
     settings = await response.json();
     $("settings-status").textContent = "已保存，下一条任务生效"; buttons();
   } catch (error) { $("settings-status").textContent = error.message; }
 };
+$("voice-mode").addEventListener("change", showMode);
 try {
   settings = await (await request("/api/voice/settings")).json();
   for (const [name, value] of Object.entries(settings)) {
     const field = $("settings").elements.namedItem(name);
     if (field) field.value = value;
   }
+  $("voice-mode").value = settings.voice_mode || "split";
+  showMode();
   status("就绪：按住说话，松开发送"); buttons();
 } catch (error) { status(`设置加载失败：${error.message}`); }

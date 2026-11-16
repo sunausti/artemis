@@ -114,3 +114,23 @@ def task_details(session_id: str) -> dict:
 @router.get("/api/voice/tasks/{session_id}")
 async def voice_task(session_id: str):
     return await asyncio.to_thread(task_details, session_id)
+
+
+@router.get("/api/voice/tasks/{session_id}/timings")
+async def voice_timings(session_id: str):
+    def read():
+        with db_session() as connection:
+            rows = connection.execute(
+                "SELECT name, timestamp, duration, status, payload FROM traces "
+                "WHERE session_id = ? AND name IN ('llm_timing', 'fast_app_launch') "
+                "ORDER BY timestamp",
+                (session_id,),
+            ).fetchall()
+        return {
+            "session_id": session_id,
+            "timings": [
+                {**dict(row), "payload": json.loads(row["payload"] or "{}")} for row in rows
+            ],
+        }
+
+    return await asyncio.to_thread(read)

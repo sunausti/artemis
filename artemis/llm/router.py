@@ -281,7 +281,7 @@ class ModelFactory:
             return ChatVertexAI(**{k: v for k, v in kwargs.items() if v is not None})
 
         elif provider == ModelProvider.OPENAI:
-            from langchain_openai import ChatOpenAI
+            from artemis.llm.request_timing import TimedChatOpenAI, timing_http_client
 
             api_key = (
                 endpoint.api_key
@@ -298,10 +298,21 @@ class ModelFactory:
                 "api_key": api_key,
                 "base_url": base_url,
                 "timeout": endpoint.timeout_seconds,
+                "http_async_client": timing_http_client(timeout=endpoint.timeout_seconds),
             }
             if endpoint.reasoning_effort:
                 kwargs["reasoning_effort"] = endpoint.reasoning_effort
-            return ChatOpenAI(**{k: v for k, v in kwargs.items() if v is not None})
+            if os.environ.get("ARTEMIS_OPENAI_TEXT_ONLY", "").lower() == "true":
+                kwargs["model_kwargs"] = {"modalities": ["text"]}
+            max_edge = int(os.environ.get("ARTEMIS_MODEL_IMAGE_MAX_EDGE", "0"))
+            if max_edge:
+                from artemis.llm.bounded_openai import BoundedImageChatOpenAI
+
+                return BoundedImageChatOpenAI(
+                    image_max_edge=max_edge,
+                    **{k: v for k, v in kwargs.items() if v is not None},
+                )
+            return TimedChatOpenAI(**{k: v for k, v in kwargs.items() if v is not None})
 
         elif provider == ModelProvider.ANTHROPIC:
             from langchain_anthropic import ChatAnthropic

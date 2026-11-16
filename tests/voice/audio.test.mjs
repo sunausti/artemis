@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { encodeWav, isStopCommand, terminalMessage } from "../../apps/admin_console/voice/audio.js";
+import { encodeWav, isStopCommand, terminalMessage, transcriptAction } from "../../apps/admin_console/voice/audio.js";
 
 test("WAV contains mono PCM16 samples and the actual microphone sample rate", () => {
   const wav = encodeWav([new Float32Array([-1, 0, 1])], 48000);
@@ -15,6 +15,13 @@ test("only explicit stop utterances cancel the current task", () => {
   assert.equal(isStopCommand("停止。"), true);
   assert.equal(isStopCommand("取消任务！"), true);
   assert.equal(isStopCommand("停止音乐播放"), false);
+});
+
+test("Omni transcription requires review while stop remains immediate", () => {
+  assert.equal(transcriptAction("打开", "omni"), "review");
+  assert.equal(transcriptAction("打开设置", "omni"), "review");
+  assert.equal(transcriptAction("停止", "omni"), "stop");
+  assert.equal(transcriptAction("打开设置", "split"), "submit");
 });
 
 test("terminal speech never substitutes successful wording for failure", () => {

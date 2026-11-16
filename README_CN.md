@@ -237,6 +237,35 @@ curl -fsS http://127.0.0.1:8000/api/status
 -v /path/to/artemis.local.jsonc:/etc/artemis/artemis.jsonc:ro
 ```
 
+##### Omni 统一模型模式（新设备）
+
+如果盒子使用 Omni 统一处理音频输入、视觉推理和语音输出，在 `/voice` 的语音设置中将“语音模式”切换为 **Omni 统一音频 / 视觉 / 推理**，填写：
+
+| 字段 | 参考值 |
+| --- | --- |
+| Omni 服务地址 | `http://127.0.0.1:8100/v3` |
+| Omni 模型 | `qwen3-omni` |
+| 裸 PCM 输出采样率 | `24000`，以实际服务为准 |
+| 目标设备序列号 | `127.0.0.1:5555` |
+
+保存后，音频转写、UI 任务推理和结果播报使用该 Omni 地址与模型，独立 ASR/Qwen/TTS 字段暂不参与请求。切换回独立模式时保留原配置；旧版语音设置默认仍为独立模式。
+
+```text
+麦克风 WAV → Omni Chat Completions 转写（input_audio，text 输出）
+           → Artemis + Omni 截图理解 / 工具调用（仅 text 输出）→ ADB 操作
+实际执行报告 → Omni Chat Completions 语音生成（text + audio 输出）→ 浏览器播放
+```
+
+此模式不调用 `/audio/transcriptions` 或 `/audio/speech`，统一调用 **`/v3/chat/completions`**，也不需要经过现有的 `8767` Realtime 服务。当前实现使用非流式音频响应，解析 `message.audio.data` 中的 Base64 WAV 或裸 PCM16；WAV 使用其自身采样率，裸 PCM 使用设置值。仅支持流式音频输出的 Omni 服务需另行适配。
+
+UI 操作和历史摘要进程会显式请求 `modalities: ["text"]`，仅最终播报请求 `["text", "audio"]`。转写与朗读由生成式模型按提示完成，不能保证逐字准确；**任务状态和页面上的实际执行报告为准**。当前 Omni 音色由模型服务决定，页面中的独立 TTS 音色不影响 Omni。Omni 模式不要求原设备的 `Qwen3.6-35B-A3B` 模型仍然存在。
+
+Omni 模式识别后先显示文字，**核对完整指令后点击“发送文字任务”**；取消口令仍直接处理。为降低共享模型的内存和并发压力，任务开始仅显示文字提示，不并发生成“正在处理”的语音，并关闭后台视觉步骤摘要。此设置不能保证消除大图推理或其他客户端产生的内存压力；若设备出现 OOM，应进一步评估模型服务的图像／上下文预算。
+
+Omni 语音任务还会通过任务级 `ARTEMIS_MODEL_IMAGE_MAX_EDGE=640`，在 OpenAI 请求序列化阶段将内联图片等比例缩小到最长边 640 像素（例如 2560×1440 → 640×360）。原始截图、UI 树和设备点击坐标不变，不放大小图。该限制覆盖此任务的 OpenAI 兼容模型角色；普通独立模式默认不缩放。参考设备单张 640×360 图片、无工具调用的推理已返回 HTTP 200，约 3.3 秒，采样最低可用内存约 8.1 GiB，未发生重启；完整多轮任务仍需另行验证。
+
+已加载到设备的旧镜像不包含此新增模式，需要从更新后的源码重新构建、导出、传输并 `docker load`，然后用新镜像重新创建容器。模型服务保持原样；该适配尚未完成真实设备的音频与 UI 任务联调。
+
 #### 5. Android 无障碍 Helper APK
 
 [`ArtemisAccessibilityHelper.apk`](packages/artemis-accessibility-helper/ArtemisAccessibilityHelper.apk) 是独立 Android 应用，包名为 `com.artemis.helper`，提供无障碍 UI 元素树和相关控制接口。它是纯 Java / DEX APK，没有 ABI 专用原生库，支持 x86_64；不负责 ASR、TTS 或模型推理。
@@ -309,6 +338,25 @@ curl -sS http://127.0.0.1:8000/api/stop \
 请将 `<session_id>` 替换为实际 ID。任务被接受并不表示已经执行完成。
 
 #### 8. 验证状态与常见问题
+
+##### 简单应用启动快速路径与耗时记录
+
+来自语音页面的 Flash 任务，如果整条指令仅为“打开 / 启动 + 应用名”（例如“打开应用宝”“打开设置”），会优先使用确定性启动路径：检查当前用户的已安装包 → 匹配内置或持久化别名 → 解析 launcher Activity → `am start -W` → 检查实际 resumed Activity。命中时不调用视觉模型、Hopper 或二次视觉确认。复合指令、未知名称、需要安装 APK／应用锁／输出报告的任务保留原 Agent 流程。启动后若进入系统权限页，会报告被阻塞而非声称已到达应用主界面。
+
+映射保存在 `$ARTEMIS_APP_DIR/app-catalog/`，按 ADB endpoint、设备硬件标识、序列号及 Android 用户隔离，有效期七天。每次解析都检查包仍然安装；不保存 Activity，启动时重新解析。内置常见别名包括应用宝、设置、相机、Firefox、Chrome；同名候选不唯一时交还 Agent。Agent 的 Hopper 成功解析也会写入缓存，让后续简单命令直接启动。当前不自动枚举所有本地化应用标签，因此未学习过的应用名首次仍可能调用 Hopper。
+
+任务完成后，可展开语音页的“执行 / 模型耗时明细”，或查询：
+
+```bash
+curl -sS 'http://127.0.0.1:8000/api/voice/tasks/<session_id>/timings'
+```
+
+- 快速启动：Activity 解析、启动命令、前台确认、目录解析和 worker 总时间。
+- 模型调用：`request_prepare_s`（请求准备）、`request_send_s`（开始发送）、`response_headers_s`（响应头）、`first_chunk_s`、`first_output_s`（首个非空输出）、`first_tool_arguments_s`、`tool_arguments_complete_s`（响应流关闭后工具 JSON 完整）、`total_s`，并附可获得的 usage。
+- 除请求准备耗时和 total 外，其余时间点均为相对该次尝试开始的累计秒数，不能直接相加。重试单独记录，不把响应头当作首 token。非流式调用无法测到首 token，对应字段为 null。
+- `server_vision_s`、`server_prefill_s`、`server_decode_s` 保持 null：需要服务端额外埋点，客户端不会推测这些耗时。
+
+此优化已实现开发机模拟测试；部署时需要更新运行容器／镜像，不能据此宣称真实启动延迟已验收。
 
 - **构建拉取失败**：此前开发机的完整镜像构建因 Docker Hub TLS 握手超时中断；排除基础镜像网络问题后重新构建，当前没有完成完整镜像与 AAOS 联调验收。
 - **容器反复重启**：检查日志中的 ADB 超时或 `unauthorized`，确认目标地址、ADB 授权及端口冲突。

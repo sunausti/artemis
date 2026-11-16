@@ -27,6 +27,11 @@ export function isStopCommand(text) {
   );
 }
 
+export function transcriptAction(text, mode) {
+  if (isStopCommand(text)) return "stop";
+  return mode === "omni" ? "review" : "submit";
+}
+
 export function terminalMessage(task) {
   if (["cancelled", "canceled", "stopped"].includes(task.status)) return "任务已取消。";
   if (["failed", "error"].includes(task.status)) return `任务未完成。${task.message || "请查看执行记录。"}`;

@@ -16,6 +16,7 @@ import wave
 import httpx
 
 from apps.admin_console.schemas.voice_schema import VoiceSettings
+from apps.admin_console.services import omni_voice
 from artemis.config.paths import get_app_dir, get_config_path
 from third_party.mobile_use.utils.file import load_jsonc
 
@@ -82,6 +83,13 @@ class VoiceService:
         if not audio or len(audio) > MAX_AUDIO_BYTES:
             raise ValueError("音频为空或超过 12 MiB 限制")
         settings = self.load()
+        if settings.voice_mode == "omni":
+            message = await self.omni_chat(
+                settings,
+                omni_voice.transcription_request(settings.omni_model, audio),
+                65536,
+            )
+            return omni_voice.transcription_text(message)
         data = {"model": settings.asr_model, "response_format": "json"}
         if settings.asr_language != "auto":
             data["language"] = settings.asr_language
@@ -105,6 +113,13 @@ class VoiceService:
         settings = self.load()
         if not text.strip():
             raise ValueError("播报文字不能为空")
+        if settings.voice_mode == "omni":
+            message = await self.omni_chat(
+                settings,
+                omni_voice.speech_request(settings.omni_model, text),
+                MAX_AUDIO_BYTES * 4 // 3 + 65536,
+            )
+            return omni_voice.speech_wave(message, settings.omni_sample_rate, MAX_AUDIO_BYTES)
         try:
             async with self.client() as client:
                 async with client.stream(
@@ -132,16 +147,34 @@ class VoiceService:
             wav.writeframes(pcm)
         return output.getvalue()
 
+    async def omni_chat(self, settings: VoiceSettings, body: dict, limit: int) -> dict:
+        try:
+            async with self.client() as client:
+                async with client.stream(
+                    "POST",
+                    settings.omni_base_url + "/chat/completions",
+                    json=body,
+                ) as response:
+                    content = await self.read_response(response, limit)
+            return omni_voice.response_message(json.loads(content))
+        except httpx.HTTPError as exc:
+            raise ValueError("无法连接本地 Omni 服务，请检查语音设置") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError("Omni 服务没有返回有效 JSON") from exc
+
     def model_runtime(self, settings: VoiceSettings | None = None) -> dict[str, str]:
         settings = settings or self.load()
+        is_omni = settings.voice_mode == "omni"
+        model_name = settings.omni_model if is_omni else settings.llm_model
+        base_url = settings.omni_base_url if is_omni else settings.llm_base_url
         with get_config_path("artemis.jsonc").open(encoding="utf-8") as file:
             config = load_jsonc(file)
         model = {
             "provider": "openai",
-            "model": settings.llm_model,
+            "model": model_name,
             "temperature": 0.0,
             "enable_grounding": False,
-            "fallback": {"provider": "openai", "model": settings.llm_model},
+            "fallback": {"provider": "openai", "model": model_name},
         }
         config["default"] = model
         config["nodes"] = {
@@ -173,9 +206,11 @@ class VoiceService:
         flash = agent.setdefault("flash", {})
         flash["max_turns"] = 30
         flash["explorer_mode"] = "pro"
-        flash.setdefault("step_summarizer", {})["model"] = settings.llm_model
+        flash.setdefault("step_summarizer", {})["model"] = model_name
+        if is_omni:
+            flash["step_summarizer"]["enabled"] = False
         memory = agent.setdefault("memory", {})
-        memory.setdefault("chunking", {})["model"] = settings.llm_model
+        memory.setdefault("chunking", {})["model"] = model_name
         memory.setdefault("runtime", {})["max_concurrency"] = 1
         agent["video_analyzer"] = {"enabled": False, "enable_ledger": False}
         agent.setdefault("pro", {})["video_analyzer"] = {"enabled": False, "enable_ledger": False}
@@ -188,8 +223,10 @@ class VoiceService:
             atomic_write(path, content)
         return {
             "ARTEMIS_ARTEMIS_JSONC": str(path),
-            "OPENAI_BASE_URL": settings.llm_base_url,
+            "OPENAI_BASE_URL": base_url,
             "OPENAI_API_KEY": "local-ovms",
+            "ARTEMIS_OPENAI_TEXT_ONLY": "true" if is_omni else "false",
+            "ARTEMIS_MODEL_IMAGE_MAX_EDGE": "640" if is_omni else "0",
         }
 
 

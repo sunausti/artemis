@@ -85,7 +85,8 @@ def test_ready_target_executes_command_with_consistent_endpoint(bootstrap):
         "socket": "tcp:127.0.0.1:15037",
         "serial": "127.0.0.1:5555",
     }
-    assert all(call[:4] == ["-H", "127.0.0.1", "-P", "15037"] for call in calls)
+    assert calls[0] == ["-P", "15037", "start-server"]
+    assert all(call[:4] == ["-H", "127.0.0.1", "-P", "15037"] for call in calls[1:])
     assert calls[0][-1] == "start-server"
     assert ["connect", "127.0.0.1:5555"] == calls[1][-2:]
 

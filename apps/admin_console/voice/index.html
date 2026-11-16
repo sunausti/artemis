@@ -15,28 +15,39 @@
       <button id="talk" disabled>按住说话，松开发送</button>
       <button id="stop" class="secondary" disabled>停止当前任务</button>
     </div>
-    <p class="hint">任务运行时也可以按住说“停止”。按空格键或触摸按钮录音，最长六十秒。</p>
+    <p class="hint">Omni 模式识别后请核对文字，再点击发送。任务运行时也可以按住说“停止”。按空格键或触摸按钮录音，最长六十秒。</p>
     <label for="command">识别文字 / 文字指令</label>
     <textarea id="command" rows="3" placeholder="例如：打开设置，查看蓝牙是否开启，不要修改设置"></textarea>
     <button id="send" disabled>发送文字任务</button>
     <p id="task-id"></p>
     <pre id="result" aria-live="polite"></pre>
+    <details><summary>执行 / 模型耗时明细（秒）</summary><pre id="timings"></pre></details>
     <audio id="playback" controls></audio>
   </section>
   <details class="card" id="settings-panel">
-    <summary>语音设置：ASR / Qwen3.6 / TTS</summary>
+    <summary>语音设置：独立 ASR / Qwen / TTS 或 Omni</summary>
     <p class="hint">地址由 Artemis 服务端访问。host 网络下的 127.0.0.1 指盒子本机；可直接修改地址中的端口和 API 前缀。保存后对下一条任务生效。</p>
     <form id="settings">
-      <fieldset><legend>ASR 语音识别</legend>
+      <label>语音模式<select name="voice_mode" id="voice-mode">
+        <option value="split">独立 ASR / Qwen / TTS</option>
+        <option value="omni">Omni 统一音频 / 视觉 / 推理</option>
+      </select></label>
+      <fieldset id="omni-settings" hidden><legend>Omni 统一服务</legend>
+        <label>服务地址（含端口和前缀）<input name="omni_base_url" type="url" required value="http://127.0.0.1:8100/v3"></label>
+        <label>模型<input name="omni_model" required value="qwen3-omni"></label>
+        <label>裸 PCM 输出采样率<input name="omni_sample_rate" type="number" min="8000" max="48000" required value="24000"></label>
+        <p class="hint">通过 Chat Completions 转写和播报；UI 任务只请求文本 / 工具输出。WAV 输出使用自身采样率，裸 PCM 使用此处配置。Omni 播报由模型生成，文字执行报告为准。</p>
+      </fieldset>
+      <fieldset id="split-asr"><legend>ASR 语音识别</legend>
         <label>服务地址（含端口）<input name="asr_base_url" type="url" required></label>
         <label>模型<input name="asr_model" required></label>
         <label>语言<input name="asr_language" required placeholder="auto / zh"></label>
       </fieldset>
-      <fieldset><legend>Qwen3.6 本地推理</legend>
+      <fieldset id="split-llm"><legend>Qwen 本地推理</legend>
         <label>服务地址（含端口）<input name="llm_base_url" type="url" required></label>
         <label>模型<input name="llm_model" required></label>
       </fieldset>
-      <fieldset><legend>TTS 语音合成</legend>
+      <fieldset id="split-tts"><legend>TTS 语音合成</legend>
         <label>服务地址（含端口）<input name="tts_base_url" type="url" required></label>
         <label>模型<input name="tts_model" required></label>
         <label>音色<input name="tts_voice" required></label>

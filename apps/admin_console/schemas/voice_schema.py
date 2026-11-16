@@ -5,11 +5,16 @@
 """Configuration for the local voice bridge."""
 
 from urllib.parse import urlsplit
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 
 class VoiceSettings(BaseModel):
+    voice_mode: Literal["split", "omni"] = "split"
+    omni_base_url: str = "http://127.0.0.1:8100/v3"
+    omni_model: str = "qwen3-omni"
+    omni_sample_rate: int = Field(default=24000, ge=8000, le=48000)
     asr_base_url: str = "http://127.0.0.1:8090/v1"
     asr_model: str = "sensevoice"
     asr_language: str = "auto"
@@ -21,7 +26,7 @@ class VoiceSettings(BaseModel):
     tts_sample_rate: int = Field(default=24000, ge=8000, le=48000)
     device_serial: str = "127.0.0.1:5555"
 
-    @field_validator("asr_base_url", "llm_base_url", "tts_base_url")
+    @field_validator("asr_base_url", "llm_base_url", "tts_base_url", "omni_base_url")
     @classmethod
     def validate_endpoint(cls, value: str) -> str:
         value = value.strip().rstrip("/")
@@ -40,7 +45,13 @@ class VoiceSettings(BaseModel):
         return value
 
     @field_validator(
-        "asr_model", "asr_language", "llm_model", "tts_model", "tts_voice", "device_serial"
+        "asr_model",
+        "asr_language",
+        "llm_model",
+        "tts_model",
+        "tts_voice",
+        "device_serial",
+        "omni_model",
     )
     @classmethod
     def nonempty(cls, value: str) -> str:

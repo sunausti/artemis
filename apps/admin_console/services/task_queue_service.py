@@ -527,7 +527,13 @@ class TaskQueueService:
         env["ARTEMIS_TASK_WORKER"] = "1"
         model_runtime = task_item.get("model_runtime")
         if model_runtime:
-            for name in ("ARTEMIS_ARTEMIS_JSONC", "OPENAI_BASE_URL", "OPENAI_API_KEY"):
+            for name in (
+                "ARTEMIS_ARTEMIS_JSONC",
+                "OPENAI_BASE_URL",
+                "OPENAI_API_KEY",
+                "ARTEMIS_OPENAI_TEXT_ONLY",
+                "ARTEMIS_MODEL_IMAGE_MAX_EDGE",
+            ):
                 if name in model_runtime:
                     env[name] = str(model_runtime[name])
         target.endpoint.apply_to_environment(env)
@@ -548,6 +554,18 @@ class TaskQueueService:
         ]
         if sess_id:
             cmd.extend(["--session-id", str(sess_id)])
+        if (
+            task_item.get("ingress") == "voice"
+            and profile == "flash"
+            and not expected_output
+            and not enable_outputter
+            and not locked_app
+            and not app_path
+        ):
+            from artemis.runtime.app_catalog import simple_launch_name
+
+            if simple_launch_name(goal):
+                cmd[2] = "artemis.runtime.fast_launch_worker"
         if expected_output:
             cmd.extend(["--output-description", str(expected_output)])
         if enable_outputter is not None:

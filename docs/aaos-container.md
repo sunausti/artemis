@@ -108,6 +108,20 @@ docker run -d \
 
 ## 语音 API
 
+### Omni 统一服务
+
+语音设置支持 `voice_mode=split`（默认，兼容旧配置）和 `voice_mode=omni`。Omni 模式填写 `omni_base_url`（默认 `http://127.0.0.1:8100/v3`）、`omni_model`（默认 `qwen3-omni`）及 `omni_sample_rate`（默认 `24000`）。同一个 Omni 服务承担转写、UI 推理和播报，不调用独立 ASR/TTS 接口。
+
+- 转写通过 Chat Completions 的 `input_audio` 发送 Base64 WAV，仅请求文本输出。
+- 语音任务的所有模型角色与历史摘要使用 Omni 模型快照，并通过 worker 环境变量 `ARTEMIS_OPENAI_TEXT_ONLY=true` 请求 `modalities: ["text"]`。
+- 播报发送原始报告文字，请求 `modalities: ["text", "audio"]`；当前只处理非流式 `message.audio.data`，支持 Base64 单声道 PCM16 WAV 和裸 PCM16。
+- WAV 采用文件自带采样率，裸 PCM 使用配置采样率。Omni 音色由服务决定。模型转写和朗读可能改写内容，实际状态以页面文本报告为准。
+- 旧镜像需要重新构建和加载后才能使用 Omni 模式。本次代码验证不操作设备或修改其已有服务。
+
+Omni 转写结果需在页面核对后点击发送；不完整的“打开”等结果不会自动提交。为避免语音生成与 UI 推理重叠，Omni 任务开始不播报“正在处理”，后台视觉步骤摘要也默认关闭。设备仍需具备足够的截图推理内存，且其他 Omni 客户端的并发不会被 Artemis 控制。
+
+Omni worker 使用 `ARTEMIS_MODEL_IMAGE_MAX_EDGE=640` 在 OpenAI provider 请求边界缩小内联图片，保留原始截图和所有设备坐标。参考设备 640×360 单图无工具请求验证通过（约 3.3 秒，HTTP 200，最低采样可用内存约 8.1 GiB）；不代表完整多轮任务已验收。当前运行容器已热更新，镜像／归档须重新构建才包含此修复。
+
 现有 SenseVoice ASR、Qwen3-TTS 和 speech-to-speech 服务保持独立。新页面直接复用 ASR/TTS，不经过已有的语音聊天页面。
 
 - `GET /api/voice/settings`：读取设置。
